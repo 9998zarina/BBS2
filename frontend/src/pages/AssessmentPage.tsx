@@ -12,7 +12,7 @@ import type { Assessment, VideoUploadResponse } from '../types';
 export function AssessmentPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getAssessment, updateTestResult, saveAssessment } = useAssessmentStore();
+  const { getAssessment, updateTestResult } = useAssessmentStore();
 
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [selectedTestId, setSelectedTestId] = useState(1);

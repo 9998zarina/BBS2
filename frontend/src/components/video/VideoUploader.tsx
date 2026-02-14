@@ -22,9 +22,9 @@ export function VideoUploader({ label, onUpload, currentVideoId, disabled }: Vid
       return;
     }
 
-    const maxSize = 500 * 1024 * 1024;
+    const maxSize = 2 * 1024 * 1024 * 1024; // 2GB
     if (file.size > maxSize) {
-      setError('파일 크기는 500MB 이하여야 합니다.');
+      setError(`파일 크기가 너무 큽니다. 최대 2GB까지 업로드 가능합니다. (현재: ${(file.size / (1024 * 1024)).toFixed(1)}MB)`);
       return;
     }
 
@@ -33,21 +33,17 @@ export function VideoUploader({ label, onUpload, currentVideoId, disabled }: Vid
     setProgress(0);
 
     try {
-      const progressInterval = setInterval(() => {
-        setProgress(prev => Math.min(prev + 10, 90));
-      }, 200);
+      const response = await videoApi.upload(file, (progressPercent) => {
+        setProgress(progressPercent);
+      });
 
-      const response = await videoApi.upload(file);
-
-      clearInterval(progressInterval);
       setProgress(100);
-
       onUpload(response, file);
     } catch (err) {
       setError(err instanceof Error ? err.message : '업로드에 실패했습니다.');
     } finally {
       setIsUploading(false);
-      setProgress(0);
+      setTimeout(() => setProgress(0), 500);
     }
   }, [onUpload]);
 
@@ -141,7 +137,7 @@ export function VideoUploader({ label, onUpload, currentVideoId, disabled }: Vid
               영상 파일을 드래그하거나 클릭하여 업로드
             </p>
             <p className="text-xs text-gray-400">
-              MP4, MOV, AVI (최대 500MB)
+              MP4, MOV, AVI (최대 2GB)
             </p>
           </div>
         )}

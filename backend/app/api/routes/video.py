@@ -11,6 +11,9 @@ router = APIRouter()
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# 최대 파일 크기: 2GB
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024
+
 
 class VideoMetadata(BaseModel):
     id: str
@@ -36,10 +39,26 @@ async def upload_video(file: UploadFile = File(...)):
     saved_filename = f"{video_id}{file_extension}"
     file_path = os.path.join(UPLOAD_DIR, saved_filename)
 
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    file_size = os.path.getsize(file_path)
+    # 청크 단위로 파일 저장 (대용량 파일 지원)
+    file_size = 0
+    try:
+        with open(file_path, "wb") as buffer:
+            while chunk := await file.read(1024 * 1024):  # 1MB 청크
+                file_size += len(chunk)
+                if file_size > MAX_FILE_SIZE:
+                    buffer.close()
+                    os.remove(file_path)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"파일이 너무 큽니다. 최대 2GB까지 업로드 가능합니다. (현재: {file_size / (1024*1024):.1f}MB)"
+                    )
+                buffer.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"파일 업로드 실패: {str(e)}")
 
     return VideoUploadResponse(
         id=video_id,

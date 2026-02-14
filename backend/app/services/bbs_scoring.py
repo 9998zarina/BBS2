@@ -182,41 +182,90 @@ class BBSScoringService:
     def _score_sitting_unsupported(self, front_data: list, side_data: list) -> dict:
         """
         Test 3: Sitting Unsupported (2 minutes)
-        4 = sit safely and securely 2 minutes
-        3 = sit 2 minutes under supervision
-        2 = sit 30 seconds
-        1 = sit 10 seconds
-        0 = unable to sit without support 10 seconds
+        의자 등받이에 기대지 않고 앉아있을 수 있는지 평가
+        4 = sit safely and securely 2 minutes (등을 떼고 안정적으로 2분)
+        3 = sit 2 minutes under supervision (등을 떼고 2분, 약간 불안정)
+        2 = sit 30 seconds (등을 떼고 30초)
+        1 = sit 10 seconds (등을 떼고 10초)
+        0 = unable to sit without support 10 seconds (등을 떼고 10초 불가)
         """
-        valid_frames = self._get_valid_frames(front_data)
+        # 측면 영상이 있으면 측면 사용 (등이 떨어졌는지 더 정확히 판단)
+        data_to_use = side_data if side_data else front_data
+        valid_frames = self._get_valid_frames(data_to_use)
         if not valid_frames:
             return self._no_pose_result("No valid pose data detected")
 
-        stability = StabilityAnalyzer(valid_frames, self.fps)
-        sway = stability.calculate_sway_metrics()
-        duration_sec = len(valid_frames) / self.fps
+        # 등을 의자에서 떼고 앉아있는 프레임 감지
+        # 측면에서: 어깨-엉덩이 각도가 수직에 가까우면 등을 떼고 있음
+        back_off_chair_frames = []
+        for frame in valid_frames:
+            lm = frame['landmarks']
 
-        is_stable = sway['max_excursion'] < 0.08
+            # 어깨와 엉덩이의 수직 정렬 확인 (측면 뷰에서)
+            shoulder_x = (lm['left_shoulder']['x'] + lm['right_shoulder']['x']) / 2
+            hip_x = (lm['left_hip']['x'] + lm['right_hip']['x']) / 2
+            shoulder_y = (lm['left_shoulder']['y'] + lm['right_shoulder']['y']) / 2
+            hip_y = (lm['left_hip']['y'] + lm['right_hip']['y']) / 2
 
-        if duration_sec >= 120 and is_stable:
-            score, reasoning = 4, "Able to sit safely and securely for 2 minutes"
-        elif duration_sec >= 120:
-            score, reasoning = 3, "Able to sit 2 minutes under supervision"
-        elif duration_sec >= 30:
-            score, reasoning = 2, f"Able to sit {duration_sec:.1f} seconds"
-        elif duration_sec >= 10:
-            score, reasoning = 1, f"Able to sit {duration_sec:.1f} seconds"
+            # 몸통 기울기 계산 (어깨가 엉덩이보다 앞에 있거나 수직이면 등을 뗀 것)
+            trunk_lean = shoulder_x - hip_x  # 양수면 앞으로 기울임, 음수면 뒤로 기대
+
+            # 등을 뗀 상태: 몸통이 수직이거나 앞으로 기울어진 경우
+            # (측면에서 어깨x >= 엉덩이x - 0.05 이면 등을 떼고 있음)
+            if trunk_lean >= -0.05:
+                back_off_chair_frames.append(frame)
+
+        # 등을 뗀 상태에서의 시간 계산
+        back_off_duration_sec = len(back_off_chair_frames) / self.fps
+        total_duration_sec = len(valid_frames) / self.fps
+
+        # 안정성 분석 (등을 뗀 프레임에 대해서만)
+        if back_off_chair_frames:
+            stability = StabilityAnalyzer(back_off_chair_frames, self.fps)
+            sway = stability.calculate_sway_metrics()
+            is_stable = sway['max_excursion'] < 0.08 and sway['ml_range'] < 0.06
+
+            # 좌우 흔들림 정도
+            lateral_sway = sway['ml_range']
+            # 앞뒤 흔들림 정도
+            ap_sway = sway['ap_range']
         else:
-            score, reasoning = 0, "Unable to sit without support for 10 seconds"
+            is_stable = False
+            lateral_sway = 0
+            ap_sway = 0
+
+        # 채점
+        if back_off_duration_sec >= 120 and is_stable:
+            score = 4
+            reasoning = f"등을 떼고 안정적으로 {back_off_duration_sec:.0f}초 앉아있음"
+        elif back_off_duration_sec >= 120:
+            score = 3
+            reasoning = f"등을 떼고 {back_off_duration_sec:.0f}초 앉아있음 (약간의 흔들림)"
+        elif back_off_duration_sec >= 30:
+            score = 2
+            reasoning = f"등을 떼고 {back_off_duration_sec:.0f}초 앉아있음"
+        elif back_off_duration_sec >= 10:
+            score = 1
+            reasoning = f"등을 떼고 {back_off_duration_sec:.0f}초 앉아있음"
+        else:
+            score = 0
+            if back_off_duration_sec > 0:
+                reasoning = f"등을 떼고 {back_off_duration_sec:.1f}초만 앉아있음 (10초 미만)"
+            else:
+                reasoning = "등을 의자에서 떼지 못함"
 
         return {
             'score': score,
             'confidence': 0.8,
             'reasoning': reasoning,
             'criteria_met': {
-                'duration_2min': duration_sec >= 120,
-                'duration_30sec': duration_sec >= 30,
-                'stable': is_stable
+                'back_off_chair': back_off_duration_sec >= 10,
+                'duration_2min': back_off_duration_sec >= 120,
+                'duration_30sec': back_off_duration_sec >= 30,
+                'duration_10sec': back_off_duration_sec >= 10,
+                'stable': is_stable,
+                'lateral_sway_cm': round(lateral_sway * 100, 1),
+                'ap_sway_cm': round(ap_sway * 100, 1)
             }
         }
 
@@ -352,57 +401,124 @@ class BBSScoringService:
     def _score_standing_feet_together(self, front_data: list, side_data: list) -> dict:
         """
         Test 7: Standing with Feet Together (1 minute)
-        4 = place feet together independently and stand 1 minute safely
-        3 = place feet together independently and stand 1 minute with supervision
-        2 = place feet together independently and hold 30 seconds
-        1 = needs help to attain position but able to stand 15 seconds
+        두 발 모으고 서기 - 좌우/앞뒤 흔들림 감지하여 채점
+        4 = place feet together independently and stand 1 minute safely (안정적)
+        3 = place feet together independently and stand 1 minute with supervision (약간 불안정)
+        2 = place feet together independently and hold 30 seconds (중간 정도 불안정)
+        1 = needs help to attain position but able to stand 15 seconds (많이 불안정)
         0 = needs help to attain position and unable to hold 15 seconds
         """
         valid_frames = self._get_valid_frames(front_data)
         if not valid_frames:
             return self._no_pose_result("No valid pose data detected")
 
+        # 두 발이 모아진 프레임 감지
         feet_together_frames = []
         for frame in valid_frames:
             lm = frame['landmarks']
             bos_width = calculate_base_of_support_width(lm)
-            if bos_width < 0.15:
+            if bos_width < 0.15:  # 발이 충분히 모아진 경우
                 feet_together_frames.append(frame)
 
         if not feet_together_frames:
             return {
                 'score': 1,
                 'confidence': 0.6,
-                'reasoning': "Feet not close enough together",
+                'reasoning': "발이 충분히 모아지지 않음",
                 'criteria_met': {'feet_together': False}
             }
 
+        # 안정성 분석
         stability = StabilityAnalyzer(feet_together_frames, self.fps)
         sway = stability.calculate_sway_metrics()
+        balance_events = stability.detect_loss_of_balance()
         duration_sec = len(feet_together_frames) / self.fps
 
-        is_stable = sway['max_excursion'] < 0.1
+        # 좌우 흔들림 (medial-lateral)
+        ml_sway = sway['ml_range']
+        # 앞뒤 흔들림 (anterior-posterior)
+        ap_sway = sway['ap_range']
+        # 전체 이동 거리
+        path_length = sway['path_length']
+        # 최대 편차
+        max_excursion = sway['max_excursion']
+        # 평균 속도 (흔들리는 정도)
+        mean_velocity = sway['mean_velocity']
 
-        if duration_sec >= 60 and is_stable:
-            score, reasoning = 4, "Able to stand with feet together for 1 minute safely"
-        elif duration_sec >= 60:
-            score, reasoning = 3, "Able to stand with feet together for 1 minute with supervision"
+        # 안정성 등급 계산
+        # 1. 좌우 흔들림 < 3cm = 안정, 3-6cm = 약간 불안정, 6-10cm = 불안정, >10cm = 매우 불안정
+        # 2. 앞뒤 흔들림 < 3cm = 안정, 3-6cm = 약간 불안정, 6-10cm = 불안정, >10cm = 매우 불안정
+        # (좌표는 정규화되어 0-1 범위이므로 0.03 = 약 3cm 기준)
+
+        ml_stable = ml_sway < 0.03
+        ml_slightly_unstable = 0.03 <= ml_sway < 0.06
+        ml_unstable = 0.06 <= ml_sway < 0.10
+        ml_very_unstable = ml_sway >= 0.10
+
+        ap_stable = ap_sway < 0.03
+        ap_slightly_unstable = 0.03 <= ap_sway < 0.06
+        ap_unstable = 0.06 <= ap_sway < 0.10
+        ap_very_unstable = ap_sway >= 0.10
+
+        # 종합 안정성 판단
+        is_stable = ml_stable and ap_stable and max_excursion < 0.05
+        is_slightly_unstable = (ml_slightly_unstable or ap_slightly_unstable) and not (ml_unstable or ap_unstable or ml_very_unstable or ap_very_unstable)
+        is_unstable = (ml_unstable or ap_unstable) and not (ml_very_unstable or ap_very_unstable)
+        is_very_unstable = ml_very_unstable or ap_very_unstable or len(balance_events) > 3
+
+        # 흔들림 방향 설명 생성
+        sway_description = []
+        if ml_sway >= 0.03:
+            sway_description.append(f"좌우 흔들림 {ml_sway*100:.1f}cm")
+        if ap_sway >= 0.03:
+            sway_description.append(f"앞뒤 흔들림 {ap_sway*100:.1f}cm")
+        sway_text = ", ".join(sway_description) if sway_description else "안정적"
+
+        # 채점
+        if duration_sec >= 60:
+            if is_stable:
+                score = 4
+                reasoning = f"두 발 모으고 {duration_sec:.0f}초 동안 안정적으로 서 있음"
+            elif is_slightly_unstable:
+                score = 3
+                reasoning = f"두 발 모으고 {duration_sec:.0f}초 서 있음 (약간 불안정: {sway_text})"
+            elif is_unstable:
+                score = 3
+                reasoning = f"두 발 모으고 {duration_sec:.0f}초 서 있음 (불안정: {sway_text})"
+            else:  # is_very_unstable
+                score = 2
+                reasoning = f"두 발 모으고 {duration_sec:.0f}초 서 있음 (매우 불안정: {sway_text})"
         elif duration_sec >= 30:
-            score, reasoning = 2, f"Able to hold position for {duration_sec:.1f} seconds"
+            if is_stable or is_slightly_unstable:
+                score = 2
+                reasoning = f"두 발 모으고 {duration_sec:.0f}초 유지 ({sway_text})"
+            else:
+                score = 1
+                reasoning = f"두 발 모으고 {duration_sec:.0f}초 유지 (불안정: {sway_text})"
         elif duration_sec >= 15:
-            score, reasoning = 1, f"Able to stand {duration_sec:.1f} seconds with help"
+            score = 1
+            reasoning = f"두 발 모으고 {duration_sec:.0f}초 유지 (도움 필요, {sway_text})"
         else:
-            score, reasoning = 0, "Unable to hold position for 15 seconds"
+            score = 0
+            reasoning = f"두 발 모으고 {duration_sec:.1f}초만 유지 (15초 미만)"
 
         return {
             'score': score,
-            'confidence': 0.75,
+            'confidence': 0.8,
             'reasoning': reasoning,
             'criteria_met': {
                 'feet_together': True,
                 'duration_1min': duration_sec >= 60,
                 'duration_30sec': duration_sec >= 30,
-                'stable': is_stable
+                'duration_15sec': duration_sec >= 15,
+                'stable': is_stable,
+                'slightly_unstable': is_slightly_unstable,
+                'unstable': is_unstable,
+                'very_unstable': is_very_unstable,
+                'lateral_sway_cm': round(ml_sway * 100, 1),
+                'ap_sway_cm': round(ap_sway * 100, 1),
+                'max_excursion_cm': round(max_excursion * 100, 1),
+                'balance_loss_events': len(balance_events)
             }
         }
 

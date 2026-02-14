@@ -44,3 +44,9 @@ coverage/
 # Temporary
 tmp/
 temp/
+
+# Model files (too large for git)
+pose_landmarker.task
+*.pt
+*.pth
+*.onnx
