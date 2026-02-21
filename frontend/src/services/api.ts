@@ -196,35 +196,13 @@ export const healthApi = {
   },
 };
 
-// Real-time camera analysis types
-export interface FrameAnalysisResponse {
-  has_pose: boolean;
-  num_people: number;
-  landmarks: Record<string, unknown> | null;
-  keypoints_2d: Array<{
-    name: string;
-    x: number;
-    y: number;
-    visibility: number;
-  }> | null;
-  detected_test_id: number | null;
-  detected_test_name: string | null;
-  detected_test_name_ko: string | null;
-  detection_confidence: number | null;
-  error: string | null;
-}
-
-export interface SessionAnalysisResponse {
-  detected_test_id: number;
-  detected_test_name: string;
-  detected_test_name_ko: string;
-  detection_confidence: number;
+// BBS Real-time Scoring API
+export interface BBSScoreResponse {
   score: number;
-  scoring_confidence: number;
+  confidence: number;
   reasoning: string;
   criteria_met: Record<string, boolean>;
-  all_test_scores: Record<string, number> | null;
-  error: string | null;
+  duration_sec: number;
 }
 
 export interface BBSTest {
@@ -233,61 +211,23 @@ export interface BBSTest {
   name_ko: string;
   description: string;
   duration_seconds: number | null;
+  max_score: number;
 }
 
-export interface ContinuousAnalysisResponse {
-  action_detected: boolean;
-  action_complete: boolean;
-  progress_percent: number;
-  duration_ms: number;
-  score: number | null;
-  interim_score: number | null;  // Real-time score (always calculated)
-  scoring_confidence: number | null;
-  reasoning: string | null;
-  criteria_met: Record<string, boolean> | null;
-  feedback: string;
-}
-
-export const realtimeApi = {
-  analyzeFrame: async (
-    imageData: string,
-    timestampMs: number,
-    selectedTestId?: number
-  ): Promise<FrameAnalysisResponse> => {
-    const response = await api.post<FrameAnalysisResponse>('/realtime/frame', {
-      image_data: imageData,
-      timestamp_ms: timestampMs,
-      selected_test_id: selectedTestId ?? null,
-    });
-    return response.data;
-  },
-
-  analyzeSession: async (
-    frames: Array<{ landmarks: Record<string, unknown> | null; timestamp_ms: number }>,
-    selectedTestId?: number
-  ): Promise<SessionAnalysisResponse> => {
-    const response = await api.post<SessionAnalysisResponse>('/realtime/session', {
+export const bbsApi = {
+  score: async (
+    testId: number,
+    frames: Array<{ landmarks: Record<string, unknown>; timestamp_ms: number }>
+  ): Promise<BBSScoreResponse> => {
+    const response = await api.post<BBSScoreResponse>('/bbs/score', {
+      test_id: testId,
       frames,
-      selected_test_id: selectedTestId ?? null,
     });
     return response.data;
   },
 
-  analyzeContinuous: async (
-    frames: Array<{ landmarks: Record<string, unknown> | null; timestamp_ms: number }>,
-    currentTestId: number,
-    minDurationMs: number = 3000
-  ): Promise<ContinuousAnalysisResponse> => {
-    const response = await api.post<ContinuousAnalysisResponse>('/realtime/continuous', {
-      frames,
-      current_test_id: currentTestId,
-      min_duration_ms: minDurationMs,
-    });
-    return response.data;
-  },
-
-  getAvailableTests: async (): Promise<{ tests: BBSTest[] }> => {
-    const response = await api.get<{ tests: BBSTest[] }>('/realtime/tests');
+  getTests: async (): Promise<{ tests: BBSTest[] }> => {
+    const response = await api.get<{ tests: BBSTest[] }>('/bbs/tests');
     return response.data;
   },
 };

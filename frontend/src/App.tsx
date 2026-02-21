@@ -2,8 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { HomePage } from './pages/HomePage';
 import { AssessmentPage } from './pages/AssessmentPage';
 import { AutoAnalysisPage } from './pages/AutoAnalysisPage';
-import { CameraAssessmentPage } from './pages/CameraAssessmentPage';
-import { BBSAssessmentPage } from './pages/BBSAssessmentPage';
+import { BBSLiveAssessment } from './pages/BBSLiveAssessment';
 import './index.css';
 
 function App() {
@@ -13,8 +12,8 @@ function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/assessment/:id" element={<AssessmentPage />} />
         <Route path="/auto-analysis" element={<AutoAnalysisPage />} />
-        <Route path="/camera-assessment" element={<CameraAssessmentPage />} />
-        <Route path="/bbs-assessment" element={<BBSAssessmentPage />} />
+        <Route path="/live-assessment" element={<BBSLiveAssessment />} />
+        <Route path="/bbs-assessment" element={<BBSLiveAssessment />} />
       </Routes>
     </BrowserRouter>
   );

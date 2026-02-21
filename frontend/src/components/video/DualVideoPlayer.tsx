@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { videoApi, syncApi } from '../../services/api';
+import { VideoWithSkeleton, type VideoWithSkeletonRef } from './VideoWithSkeleton';
 
 interface DualVideoPlayerProps {
   frontVideoId: string | null;
@@ -14,9 +15,10 @@ export function DualVideoPlayer({
   syncOffsetMs,
   onOffsetChange,
 }: DualVideoPlayerProps) {
-  const frontVideoRef = useRef<HTMLVideoElement>(null);
-  const sideVideoRef = useRef<HTMLVideoElement>(null);
+  const frontVideoRef = useRef<VideoWithSkeletonRef>(null);
+  const sideVideoRef = useRef<VideoWithSkeletonRef>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [showSkeleton, setShowSkeleton] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [manualOffset, setManualOffset] = useState(syncOffsetMs);
@@ -217,15 +219,14 @@ export function DualVideoPlayer({
           <h4 className="text-sm font-medium text-gray-700 text-center">정면 영상</h4>
           <div className="aspect-video bg-black rounded-lg overflow-hidden">
             {frontVideoId ? (
-              <video
+              <VideoWithSkeleton
                 ref={frontVideoRef}
                 src={videoApi.getVideoUrl(frontVideoId)}
-                className="w-full h-full object-contain"
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
                 onEnded={handleVideoEnded}
                 onPause={handleVideoPause}
-                playsInline
+                showSkeleton={showSkeleton}
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-gray-400">
@@ -239,14 +240,13 @@ export function DualVideoPlayer({
           <h4 className="text-sm font-medium text-gray-700 text-center">측면 영상</h4>
           <div className="aspect-video bg-black rounded-lg overflow-hidden">
             {sideVideoId ? (
-              <video
+              <VideoWithSkeleton
                 ref={sideVideoRef}
                 src={videoApi.getVideoUrl(sideVideoId)}
-                className="w-full h-full object-contain"
                 onLoadedMetadata={handleLoadedMetadata}
                 onEnded={handleVideoEnded}
                 onPause={handleVideoPause}
-                playsInline
+                showSkeleton={showSkeleton}
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-gray-400">
@@ -282,6 +282,21 @@ export function DualVideoPlayer({
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+
+          {/* Skeleton toggle */}
+          <button
+            onClick={() => setShowSkeleton(!showSkeleton)}
+            className={`p-2 rounded-full transition-colors ${
+              showSkeleton
+                ? 'bg-green-600 text-white hover:bg-green-700'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+            title={showSkeleton ? '스켈레톤 숨기기' : '스켈레톤 표시'}
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
             </svg>
           </button>
 

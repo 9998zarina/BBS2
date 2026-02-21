@@ -2,62 +2,82 @@ import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { VideoUploader } from '../components/video/VideoUploader';
 import { DualVideoPlayer } from '../components/video/DualVideoPlayer';
-import { autoAnalysisApi, type AutoAnalysisResult } from '../services/api';
+import { videoApi } from '../services/api';
+import { useAudioSync } from '../hooks/useAudioSync';
+import { useLocalVideoAnalysis } from '../hooks/useLocalVideoAnalysis';
 import type { VideoUploadResponse } from '../types';
 import { BBS_TEST_ITEMS } from '../utils/bbs-test-items';
 
+// Local analysis result type
+interface LocalAnalysisResult {
+  detectedTestId: number;
+  detectedTestName: string;
+  detectedTestNameKo: string;
+  score: number;
+  confidence: number;
+  reasoning: string;
+  criteriaMet: Record<string, boolean>;
+  framesAnalyzed: number;
+}
+
 export function AutoAnalysisPage() {
   const navigate = useNavigate();
+  const { calculateSync, syncing, progress: syncProgress } = useAudioSync();
+  const { analyzeVideo, analyzing, progress: analysisProgress, error: analysisError, reset: resetAnalysis } = useLocalVideoAnalysis();
 
   const [frontVideoId, setFrontVideoId] = useState<string | null>(null);
   const [sideVideoId, setSideVideoId] = useState<string | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [result, setResult] = useState<AutoAnalysisResult | null>(null);
+  const [syncOffsetMs, setSyncOffsetMs] = useState<number>(0);
+  const [syncConfidence, setSyncConfidence] = useState<number | null>(null);
+  const [result, setResult] = useState<LocalAnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleFrontVideoUpload = useCallback((response: VideoUploadResponse) => {
     setFrontVideoId(response.id);
     setResult(null);
     setError(null);
+    setSyncOffsetMs(0);
+    setSyncConfidence(null);
   }, []);
 
-  const handleSideVideoUpload = useCallback((response: VideoUploadResponse) => {
+  const handleSideVideoUpload = useCallback(async (response: VideoUploadResponse) => {
     setSideVideoId(response.id);
-  }, []);
+
+    // 정면 영상이 있으면 자동 오디오 싱크 계산
+    if (frontVideoId) {
+      try {
+        const frontUrl = videoApi.getVideoUrl(frontVideoId);
+        const sideUrl = videoApi.getVideoUrl(response.id);
+
+        const syncResult = await calculateSync(frontUrl, sideUrl);
+        setSyncOffsetMs(syncResult.offsetMs);
+        setSyncConfidence(syncResult.confidence);
+      } catch (err) {
+        console.error('오디오 싱크 실패:', err);
+        // 실패해도 계속 진행 (오프셋 0으로)
+      }
+    }
+  }, [frontVideoId, calculateSync]);
 
   const handleAutoAnalyze = async () => {
     if (!frontVideoId) return;
 
-    setAnalyzing(true);
     setError(null);
     setResult(null);
+    resetAnalysis();
 
     try {
-      const initialResult = await autoAnalysisApi.start(frontVideoId, sideVideoId || undefined);
+      // 로컬 분석 (빠름!)
+      const videoUrl = videoApi.getVideoUrl(frontVideoId);
+      const analysisResult = await analyzeVideo(videoUrl);
 
-      // Poll for results
-      const pollInterval = setInterval(async () => {
-        try {
-          const status = await autoAnalysisApi.getStatus(initialResult.jobId);
-
-          if (status.status === 'completed') {
-            clearInterval(pollInterval);
-            setResult(status);
-            setAnalyzing(false);
-          } else if (status.status === 'failed') {
-            clearInterval(pollInterval);
-            setError(status.error || '분석에 실패했습니다.');
-            setAnalyzing(false);
-          }
-        } catch (err) {
-          clearInterval(pollInterval);
-          setError('분석 상태를 확인하는 중 오류가 발생했습니다.');
-          setAnalyzing(false);
-        }
-      }, 2000);
+      if (analysisResult) {
+        setResult(analysisResult);
+      } else if (analysisError) {
+        setError(analysisError);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '분석을 시작하는 중 오류가 발생했습니다.');
-      setAnalyzing(false);
+      setError(err instanceof Error ? err.message : '분석 중 오류가 발생했습니다.');
     }
   };
 
@@ -117,6 +137,65 @@ export function AutoAnalysisPage() {
           </div>
         </div>
 
+        {/* 오디오 싱크 상태 */}
+        {syncing && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+            <div className="flex items-center gap-3">
+              <svg className="animate-spin h-5 w-5 text-blue-600" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              <div className="flex-1">
+                <p className="text-blue-800 font-medium">오디오 싱크 분석 중...</p>
+                <div className="mt-1 w-full bg-blue-200 rounded-full h-2">
+                  <div
+                    className="bg-blue-600 h-2 rounded-full transition-all"
+                    style={{ width: `${syncProgress}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 싱크 결과 */}
+        {sideVideoId && syncConfidence !== null && !syncing && (
+          <div className={`rounded-xl p-4 ${syncConfidence > 0.5 ? 'bg-green-50 border border-green-200' : 'bg-yellow-50 border border-yellow-200'}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {syncConfidence > 0.5 ? (
+                  <svg className="w-6 h-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                ) : (
+                  <svg className="w-6 h-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                )}
+                <div>
+                  <p className={`font-medium ${syncConfidence > 0.5 ? 'text-green-800' : 'text-yellow-800'}`}>
+                    오디오 싱크 완료
+                  </p>
+                  <p className={`text-sm ${syncConfidence > 0.5 ? 'text-green-600' : 'text-yellow-600'}`}>
+                    오프셋: {syncOffsetMs > 0 ? '+' : ''}{syncOffsetMs}ms | 신뢰도: {Math.round(syncConfidence * 100)}%
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500">수동 조정:</span>
+                <input
+                  type="number"
+                  value={syncOffsetMs}
+                  onChange={(e) => setSyncOffsetMs(Number(e.target.value))}
+                  className="w-24 px-2 py-1 border rounded text-sm"
+                  step="100"
+                />
+                <span className="text-sm text-gray-500">ms</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 영상 미리보기 */}
         {frontVideoId && (
           <div className="bg-white rounded-xl shadow-sm border p-6">
@@ -124,13 +203,13 @@ export function AutoAnalysisPage() {
             <DualVideoPlayer
               frontVideoId={frontVideoId}
               sideVideoId={sideVideoId}
-              syncOffsetMs={0}
+              syncOffsetMs={syncOffsetMs}
             />
           </div>
         )}
 
         {/* 분석 버튼 */}
-        <div className="flex justify-center">
+        <div className="flex flex-col items-center gap-4">
           <button
             onClick={handleAutoAnalyze}
             disabled={!frontVideoId || analyzing}
@@ -148,12 +227,28 @@ export function AutoAnalysisPage() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                 </svg>
-                AI 분석 중...
+                {analysisProgress?.message || 'AI 분석 중...'}
               </span>
             ) : (
-              '🤖 AI 자동 분석 시작'
+              '🚀 빠른 AI 분석 시작'
             )}
           </button>
+
+          {/* 분석 진행률 */}
+          {analyzing && analysisProgress && (
+            <div className="w-full max-w-md">
+              <div className="flex justify-between text-sm text-gray-600 mb-1">
+                <span>{analysisProgress.message}</span>
+                <span>{analysisProgress.progress}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div
+                  className="bg-gradient-to-r from-purple-600 to-blue-600 h-3 rounded-full transition-all duration-300"
+                  style={{ width: `${analysisProgress.progress}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 에러 */}
@@ -188,45 +283,29 @@ export function AutoAnalysisPage() {
                   <p className="text-gray-600">{result.detectedTestName}</p>
                 </div>
                 <div className="text-right">
-                  <div className="text-sm text-gray-500">감지 신뢰도</div>
+                  <div className="text-sm text-gray-500">분석 신뢰도</div>
                   <div className="text-2xl font-bold text-purple-600">
-                    {result.detectionConfidence
-                      ? `${Math.round(result.detectionConfidence * 100)}%`
-                      : '-'}
+                    {Math.round(result.confidence * 100)}%
                   </div>
                 </div>
               </div>
 
-              {/* 다른 검사 점수 */}
-              {result.allTestScores && (
-                <div className="mt-4">
-                  <h5 className="text-sm font-medium text-gray-600 mb-2">
-                    검사별 매칭 점수
-                  </h5>
-                  <div className="grid grid-cols-7 gap-1">
-                    {Object.entries(result.allTestScores)
-                      .sort((a, b) => Number(a[0]) - Number(b[0]))
-                      .map(([testId, score]) => (
-                        <div
-                          key={testId}
-                          className={`
-                            p-2 rounded text-center text-xs
-                            ${Number(testId) === result.detectedTestId
-                              ? 'bg-purple-600 text-white'
-                              : score > 30
-                              ? 'bg-purple-100 text-purple-800'
-                              : 'bg-gray-100 text-gray-600'
-                            }
-                          `}
-                          title={getTestItem(Number(testId))?.nameKo}
-                        >
-                          <div className="font-bold">{testId}</div>
-                          <div>{Math.round(score)}</div>
-                        </div>
-                      ))}
-                  </div>
+              {/* 분석 정보 */}
+              <div className="mt-4 flex gap-4 text-sm text-gray-600">
+                <div className="flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                  {result.framesAnalyzed}개 프레임 분석
                 </div>
-              )}
+                <div className="flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  로컬 AI 분석 (빠름)
+                </div>
+              </div>
             </div>
 
             {/* 점수 */}
@@ -244,14 +323,12 @@ export function AutoAnalysisPage() {
                   <div className="text-gray-500 mt-2">점수</div>
                 </div>
 
-                {result.scoringConfidence && (
-                  <div className="text-center">
-                    <div className="text-4xl font-bold text-green-600">
-                      {Math.round(result.scoringConfidence * 100)}%
-                    </div>
-                    <div className="text-gray-500 mt-2">채점 신뢰도</div>
+                <div className="text-center">
+                  <div className="text-4xl font-bold text-green-600">
+                    {Math.round(result.confidence * 100)}%
                   </div>
-                )}
+                  <div className="text-gray-500 mt-2">신뢰도</div>
+                </div>
               </div>
 
               {/* 판단 근거 */}

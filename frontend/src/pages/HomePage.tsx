@@ -81,7 +81,7 @@ export function HomePage() {
               AI가 실시간으로 포즈를 분석하고 즉시 채점합니다!
             </p>
             <button
-              onClick={() => navigate('/camera-assessment')}
+              onClick={() => navigate('/live-assessment')}
               className="px-8 py-3 bg-white text-green-600 rounded-lg font-bold hover:bg-gray-100 transition-colors"
             >
               실시간 평가 시작하기

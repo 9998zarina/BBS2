@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import video, sync, analysis, auto_analysis, realtime
+from app.api.routes import video, sync, analysis, auto_analysis, bbs_realtime
 
 app = FastAPI(
     title="BBS Assessment API",
@@ -20,7 +20,7 @@ app.include_router(video.router, prefix="/api/v1/video", tags=["video"])
 app.include_router(sync.router, prefix="/api/v1/sync", tags=["sync"])
 app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["analysis"])
 app.include_router(auto_analysis.router, prefix="/api/v1/auto-analysis", tags=["auto-analysis"])
-app.include_router(realtime.router, prefix="/api/v1/realtime", tags=["realtime"])
+app.include_router(bbs_realtime.router, prefix="/api/v1/bbs", tags=["bbs-realtime"])
 
 
 @app.get("/api/v1/health")
