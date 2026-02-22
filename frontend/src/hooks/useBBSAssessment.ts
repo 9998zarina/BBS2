@@ -489,30 +489,26 @@ function scoreBBSTest(testId: number, frames: PoseFrame[], holdTimeSec: number):
 
         console.log(`[Test1 Score] 동작완료: ${motionComplete}, 손사용: ${handUsageDetected}, 전환프레임: ${transitionFrameCount}, 시도횟수: ${attemptCount}, 안정성: ${postStability.toFixed(2)}`);
 
-        // BBS 공식 채점 기준 적용
-        if (motionComplete && !handUsageDetected && attemptCount <= 1 && postStability > 0.5) {
-          // 4점: 손 사용 없이 한 번에 독립적으로 일어섬
+        // BBS 채점 기준 (간소화)
+        // 4점: 손 사용 없이 일어남
+        // 2점: 손 사용하여 일어남 (무릎에 손 딛기)
+        // 1점: 일어서기 시도했으나 완료 못함
+        // 0점: 일어서기 수행 불가
+        if (motionComplete && !handUsageDetected) {
+          // 4점: 손 사용 없이 일어섬
           return {
             score: 4,
             confidence: 0.9,
-            reasoning: '손 사용 없이 독립적으로 안정하게 일어섬',
+            reasoning: '손 사용 없이 독립적으로 일어섬',
             criteria_met: { completed: true, handUsed: false, attempts: attemptCount, stable: true }
           };
-        } else if (motionComplete && handUsageDetected && attemptCount <= 1) {
-          // 3점: 손을 사용하여 독립적으로 일어섬 (1회 시도)
-          return {
-            score: 3,
-            confidence: 0.85,
-            reasoning: '손을 사용하여 독립적으로 일어섬',
-            criteria_met: { completed: true, handUsed: true, attempts: attemptCount, stable: true }
-          };
-        } else if (motionComplete && attemptCount > 1) {
-          // 2점: 여러 번 시도 후 일어섬
+        } else if (motionComplete && handUsageDetected) {
+          // 2점: 손을 사용하여 일어섬 (무릎에 손 딛기)
           return {
             score: 2,
-            confidence: 0.75,
-            reasoning: `${attemptCount}회 시도 후 손을 사용하여 일어섬`,
-            criteria_met: { completed: true, handUsed: handUsageDetected, attempts: attemptCount, stable: false }
+            confidence: 0.85,
+            reasoning: '손을 사용하여 (무릎 딛고) 일어섬',
+            criteria_met: { completed: true, handUsed: true, attempts: attemptCount, stable: true }
           };
         } else if (standingRatio > 0.1) {
           // 1점: 일어서기 시도했으나 불안정
