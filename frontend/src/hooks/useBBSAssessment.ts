@@ -143,9 +143,22 @@ function calculateAngle(
   return deg;
 }
 
-// ========== 손 사용 감지 (무릎 짚기 감지) ==========
-// 손목이 무릎에 가깝고 + 손이 아래로 향할 때만 손 사용으로 판단
-function detectHandUsage(landmarks: YoloLandmarks): { used: boolean; side: 'left' | 'right' | 'both' | 'none' } {
+// ========== 손 위치 감지 (상세) ==========
+// 손의 위치를 감지하여 채점에 반영
+// - 'none': 손 사용 안 함 → 4점
+// - 'knee': 무릎에 손 딛기 → 2점
+// - 'thigh': 허벅지에 손 딛기 → 3점
+// - 'armrest': 의자 팔걸이/옆 지지 → 3점
+
+type HandPosition = 'none' | 'knee' | 'thigh' | 'armrest';
+
+interface HandUsageResult {
+  used: boolean;
+  position: HandPosition;
+  side: 'left' | 'right' | 'both' | 'none';
+}
+
+function detectHandUsage(landmarks: YoloLandmarks): HandUsageResult {
   const leftWrist = landmarks['left_wrist'];
   const rightWrist = landmarks['right_wrist'];
   const leftElbow = landmarks['left_elbow'];
@@ -157,48 +170,93 @@ function detectHandUsage(landmarks: YoloLandmarks): { used: boolean; side: 'left
 
   // 필수 랜드마크 확인
   if (!leftWrist || !rightWrist || !leftKnee || !rightKnee || !leftHip || !rightHip) {
-    return { used: false, side: 'none' };
+    return { used: false, position: 'none', side: 'none' };
   }
-
-  // 몸통 길이 계산 (엉덩이-무릎 거리를 기준으로 임계값 설정)
-  const torsoHeight = Math.abs(
-    ((leftHip.y + rightHip.y) / 2) - ((leftKnee.y + rightKnee.y) / 2)
-  );
-
-  // 임계값: 몸통 길이의 30% 이내면 손 사용 가능성 (더 엄격하게: 50% → 30%)
-  const threshold = torsoHeight * 0.3;
 
   // 거리 계산 함수
   const distanceFn = (p1: { x: number; y: number }, p2: { x: number; y: number }) =>
     Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
 
-  // 왼손목-왼무릎, 오른손목-오른무릎 거리 계산
-  const leftDistance = distanceFn(leftWrist, leftKnee);
-  const rightDistance = distanceFn(rightWrist, rightKnee);
+  // 몸통 기준 길이 (엉덩이-무릎 거리)
+  const hipY = (leftHip.y + rightHip.y) / 2;
+  const kneeY = (leftKnee.y + rightKnee.y) / 2;
+  const thighLength = Math.abs(hipY - kneeY);
 
-  // 손이 아래로 향하는지 확인 (손목이 팔꿈치보다 아래에 있어야 함)
+  // 몸통 너비 (왼쪽 엉덩이 - 오른쪽 엉덩이)
+  const bodyWidth = Math.abs(leftHip.x - rightHip.x);
+
+  // 손이 아래로 향하는지 확인 (손목이 팔꿈치보다 아래)
   const leftHandDown = leftElbow ? leftWrist.y > leftElbow.y : true;
   const rightHandDown = rightElbow ? rightWrist.y > rightElbow.y : true;
 
-  // 손 사용 조건: 무릎 근접 + 손이 아래로 향함
-  const leftUsed = leftDistance < threshold && leftHandDown;
-  const rightUsed = rightDistance < threshold && rightHandDown;
+  // 각 손의 위치 감지
+  const detectSingleHandPosition = (
+    wrist: { x: number; y: number },
+    knee: { x: number; y: number },
+    hip: { x: number; y: number },
+    handDown: boolean
+  ): HandPosition => {
+    if (!handDown) return 'none'; // 손이 위로 향하면 사용 안 함
 
-  // 디버그 로그 (매 프레임)
-  console.log(`[HandUsage] L거리: ${leftDistance.toFixed(3)}, R거리: ${rightDistance.toFixed(3)}, 임계값: ${threshold.toFixed(3)}, L아래: ${leftHandDown}, R아래: ${rightHandDown}`);
+    const distToKnee = distanceFn(wrist, knee);
+    const distToHip = distanceFn(wrist, hip);
 
-  if (leftUsed && rightUsed) {
-    console.log(`[HandUsage] 양손 사용 (L: ${leftDistance.toFixed(3)}, R: ${rightDistance.toFixed(3)}, threshold: ${threshold.toFixed(3)})`);
-    return { used: true, side: 'both' };
-  } else if (leftUsed) {
-    console.log(`[HandUsage] 왼손 사용 (distance: ${leftDistance.toFixed(3)}, threshold: ${threshold.toFixed(3)})`);
-    return { used: true, side: 'left' };
-  } else if (rightUsed) {
-    console.log(`[HandUsage] 오른손 사용 (distance: ${rightDistance.toFixed(3)}, threshold: ${threshold.toFixed(3)})`);
-    return { used: true, side: 'right' };
+    // 무릎 근접 임계값 (허벅지 길이의 25%)
+    const kneeThreshold = thighLength * 0.25;
+    // 허벅지 영역 (손목 Y가 엉덩이와 무릎 사이)
+    const isInThighArea = wrist.y > Math.min(hipY, kneeY) && wrist.y < Math.max(hipY, kneeY);
+    // 의자 팔걸이/옆 지지 (손이 몸통 너비 바깥에 있음)
+    const bodyCenter = (leftHip.x + rightHip.x) / 2;
+    const distFromCenter = Math.abs(wrist.x - bodyCenter);
+    const isOnSide = distFromCenter > bodyWidth * 0.8;
+
+    // 1. 무릎에 손 딛기 (가장 엄격한 조건)
+    if (distToKnee < kneeThreshold) {
+      console.log(`[HandPos] 무릎 감지 - 거리: ${distToKnee.toFixed(3)}, 임계값: ${kneeThreshold.toFixed(3)}`);
+      return 'knee';
+    }
+
+    // 2. 의자 팔걸이/옆 지지
+    if (isOnSide && wrist.y > hipY - thighLength * 0.3) {
+      console.log(`[HandPos] 팔걸이 감지 - 중심거리: ${distFromCenter.toFixed(3)}, 너비: ${bodyWidth.toFixed(3)}`);
+      return 'armrest';
+    }
+
+    // 3. 허벅지에 손 딛기
+    if (isInThighArea && distToHip < thighLength * 0.5) {
+      console.log(`[HandPos] 허벅지 감지 - 엉덩이 거리: ${distToHip.toFixed(3)}`);
+      return 'thigh';
+    }
+
+    return 'none';
+  };
+
+  const leftPos = detectSingleHandPosition(leftWrist, leftKnee, leftHip, leftHandDown);
+  const rightPos = detectSingleHandPosition(rightWrist, rightKnee, rightHip, rightHandDown);
+
+  // 우선순위: knee > thigh > armrest > none
+  const positionPriority: Record<HandPosition, number> = { knee: 3, thigh: 2, armrest: 1, none: 0 };
+
+  const leftUsed = leftPos !== 'none';
+  const rightUsed = rightPos !== 'none';
+
+  // 최종 위치 결정 (더 심각한 위치 우선)
+  let finalPosition: HandPosition = 'none';
+  if (leftUsed || rightUsed) {
+    finalPosition = positionPriority[leftPos] >= positionPriority[rightPos] ? leftPos : rightPos;
   }
 
-  return { used: false, side: 'none' };
+  // 사이드 결정
+  let side: 'left' | 'right' | 'both' | 'none' = 'none';
+  if (leftUsed && rightUsed) side = 'both';
+  else if (leftUsed) side = 'left';
+  else if (rightUsed) side = 'right';
+
+  if (leftUsed || rightUsed) {
+    console.log(`[HandUsage] 손 사용 감지 - 위치: ${finalPosition}, 측면: ${side}`);
+  }
+
+  return { used: leftUsed || rightUsed, position: finalPosition, side };
 }
 
 // ========== 시도 횟수 추적 (상태 전환 감지) ==========
@@ -457,10 +515,10 @@ function scoreBBSTest(testId: number, frames: PoseFrame[], holdTimeSec: number):
   switch (testId) {
     case 1: // 앉아서 일어서기
       // 4점: 손 사용 없이 독립적으로 일어섬
-      // 3점: 손을 사용하여 독립적으로 일어섬
-      // 2점: 여러 번 시도 후 손을 사용하여 일어섬
-      // 1점: 일어서기 위해 최소한의 도움 필요
-      // 0점: 일어서기 위해 중등도 또는 최대 도움 필요
+      // 3점: 허벅지/팔걸이에 손 딛고 일어섬
+      // 2점: 무릎에 손 딛고 일어섬
+      // 1점: 일어서기 시도했으나 완료 못함
+      // 0점: 일어서기 수행 불가
       {
         const motionComplete = checkMotionCompleted(frames, 'sitting', 'standing');
 
@@ -468,7 +526,11 @@ function scoreBBSTest(testId: number, frames: PoseFrame[], holdTimeSec: number):
         // 앉은 자세/서있는 자세에서는 손 체크 안 함
         // 중간 상태 (일어나는 중)에서만 손 사용 체크
         let handUsageDetected = false;
+        let detectedHandPosition: HandPosition = 'none';
         let transitionFrameCount = 0;  // 전환 구간 프레임 수
+
+        // 손 위치 우선순위 (더 심각한 위치)
+        const positionPriority: Record<HandPosition, number> = { knee: 3, thigh: 2, armrest: 1, none: 0 };
 
         for (const frame of frames) {
           const { state: poseState } = detectPoseState(frame.landmarks);
@@ -476,10 +538,14 @@ function scoreBBSTest(testId: number, frames: PoseFrame[], holdTimeSec: number):
           // 중간 상태 (앉음도 아니고 서있음도 아닌 상태) = 일어나는 중
           if (poseState === 'unknown') {
             transitionFrameCount++;
-            const { used } = detectHandUsage(frame.landmarks);
+            const { used, position } = detectHandUsage(frame.landmarks);
             if (used) {
               handUsageDetected = true;
-              console.log('[Test1] 손 사용 감지됨 (전환 구간에서)');
+              // 더 심각한 위치로 업데이트
+              if (positionPriority[position] > positionPriority[detectedHandPosition]) {
+                detectedHandPosition = position;
+              }
+              console.log(`[Test1] 손 사용 감지됨 - 위치: ${position}`);
             }
           }
         }
@@ -487,11 +553,12 @@ function scoreBBSTest(testId: number, frames: PoseFrame[], holdTimeSec: number):
         // 시도 횟수 추적 (앉기→서기 전환 횟수)
         const attemptCount = countAttempts(frames, 'sitting', 'standing');
 
-        console.log(`[Test1 Score] 동작완료: ${motionComplete}, 손사용: ${handUsageDetected}, 전환프레임: ${transitionFrameCount}, 시도횟수: ${attemptCount}, 안정성: ${postStability.toFixed(2)}`);
+        console.log(`[Test1 Score] 동작완료: ${motionComplete}, 손사용: ${handUsageDetected}, 손위치: ${detectedHandPosition}, 전환프레임: ${transitionFrameCount}, 시도횟수: ${attemptCount}, 안정성: ${postStability.toFixed(2)}`);
 
-        // BBS 채점 기준 (간소화)
+        // BBS 채점 기준 (손 위치에 따른 점수)
         // 4점: 손 사용 없이 일어남
-        // 2점: 손 사용하여 일어남 (무릎에 손 딛기)
+        // 3점: 허벅지/팔걸이에 손 딛고 일어남
+        // 2점: 무릎에 손 딛고 일어남
         // 1점: 일어서기 시도했으나 완료 못함
         // 0점: 일어서기 수행 불가
         if (motionComplete && !handUsageDetected) {
@@ -500,15 +567,23 @@ function scoreBBSTest(testId: number, frames: PoseFrame[], holdTimeSec: number):
             score: 4,
             confidence: 0.9,
             reasoning: '손 사용 없이 독립적으로 일어섬',
-            criteria_met: { completed: true, handUsed: false, attempts: attemptCount, stable: true }
+            criteria_met: { completed: true, handUsed: false, handPosition: 'none', attempts: attemptCount }
           };
-        } else if (motionComplete && handUsageDetected) {
-          // 2점: 손을 사용하여 일어섬 (무릎에 손 딛기)
+        } else if (motionComplete && detectedHandPosition === 'knee') {
+          // 2점: 무릎에 손 딛고 일어섬
           return {
             score: 2,
             confidence: 0.85,
-            reasoning: '손을 사용하여 (무릎 딛고) 일어섬',
-            criteria_met: { completed: true, handUsed: true, attempts: attemptCount, stable: true }
+            reasoning: '무릎에 손을 딛고 일어섬',
+            criteria_met: { completed: true, handUsed: true, handPosition: 'knee', attempts: attemptCount }
+          };
+        } else if (motionComplete && (detectedHandPosition === 'thigh' || detectedHandPosition === 'armrest')) {
+          // 3점: 허벅지/팔걸이에 손 딛고 일어섬
+          return {
+            score: 3,
+            confidence: 0.85,
+            reasoning: `${detectedHandPosition === 'thigh' ? '허벅지' : '팔걸이'}에 손을 딛고 일어섬`,
+            criteria_met: { completed: true, handUsed: true, handPosition: detectedHandPosition, attempts: attemptCount }
           };
         } else if (standingRatio > 0.1) {
           // 1점: 일어서기 시도했으나 불안정
@@ -516,7 +591,7 @@ function scoreBBSTest(testId: number, frames: PoseFrame[], holdTimeSec: number):
             score: 1,
             confidence: 0.6,
             reasoning: '일어서기 시도했으나 완료 못함',
-            criteria_met: { completed: false, handUsed: handUsageDetected, attempts: attemptCount, stable: false }
+            criteria_met: { completed: false, handUsed: handUsageDetected, handPosition: detectedHandPosition, attempts: attemptCount }
           };
         }
         // 0점: 일어서기 수행 불가
@@ -563,19 +638,20 @@ function scoreBBSTest(testId: number, frames: PoseFrame[], holdTimeSec: number):
       return { score: 0, confidence: 0.55, reasoning: '10초 미만 앉아있음', criteria_met: { duration10: false } };
 
     case 4: // 서서 앉기
-      // 4점: 손을 최소한으로 사용하여 안전하게 앉음
-      // 3점: 손을 사용하여 앉기를 조절함
-      // 2점: 다리 뒤로 의자에 기대어 앉기 조절
-      // 1점: 독립적으로 앉지만 조절되지 않은 하강
+      // 4점: 손 사용 없이 안전하게 앉음
+      // 3점: 허벅지/팔걸이에 손 딛고 앉음
+      // 2점: 무릎에 손 딛고 앉음
+      // 1점: 조절되지 않은 하강으로 앉음
       // 0점: 앉기 위해 도움 필요
       {
         const motionComplete = checkMotionCompleted(frames, 'standing', 'sitting');
 
         // ========== 손 사용 감지 (앉는 동작 중에만!) ==========
-        // 서있는 자세/앉은 자세에서는 손 체크 안 함
-        // 중간 상태 (앉는 중)에서만 손 사용 체크
         let handUsageDetected = false;
+        let detectedHandPosition: HandPosition = 'none';
         let transitionFrameCount = 0;
+
+        const positionPriority: Record<HandPosition, number> = { knee: 3, thigh: 2, armrest: 1, none: 0 };
 
         for (const frame of frames) {
           const { state: poseState } = detectPoseState(frame.landmarks);
@@ -583,48 +659,51 @@ function scoreBBSTest(testId: number, frames: PoseFrame[], holdTimeSec: number):
           // 중간 상태 = 앉는 중
           if (poseState === 'unknown') {
             transitionFrameCount++;
-            const { used } = detectHandUsage(frame.landmarks);
+            const { used, position } = detectHandUsage(frame.landmarks);
             if (used) {
               handUsageDetected = true;
-              console.log('[Test4] 손 사용 감지됨 (전환 구간에서)');
+              if (positionPriority[position] > positionPriority[detectedHandPosition]) {
+                detectedHandPosition = position;
+              }
+              console.log(`[Test4] 손 사용 감지됨 - 위치: ${position}`);
             }
           }
         }
 
-        console.log(`[Test4 Score] 동작완료: ${motionComplete}, 손사용: ${handUsageDetected}, 전환프레임: ${transitionFrameCount}, 안정성: ${postStability.toFixed(2)}`);
+        console.log(`[Test4 Score] 동작완료: ${motionComplete}, 손사용: ${handUsageDetected}, 손위치: ${detectedHandPosition}, 전환프레임: ${transitionFrameCount}, 안정성: ${postStability.toFixed(2)}`);
 
-        // BBS 공식 채점 기준 적용
-        if (motionComplete && !handUsageDetected && postStability > 0.5) {
-          // 4점: 손 사용 최소한으로 안전하게 앉음
+        // BBS 채점 기준 (손 위치에 따른 점수)
+        if (motionComplete && !handUsageDetected) {
+          // 4점: 손 사용 없이 안전하게 앉음
           return {
             score: 4,
             confidence: 0.9,
             reasoning: '손 사용 없이 안전하게 조절하여 앉음',
-            criteria_met: { completed: true, handUsed: false, controlled: true }
+            criteria_met: { completed: true, handUsed: false, handPosition: 'none' }
           };
-        } else if (motionComplete && handUsageDetected && postStability > 0.3) {
-          // 3점: 손을 사용하여 앉기 조절
+        } else if (motionComplete && detectedHandPosition === 'knee') {
+          // 2점: 무릎에 손 딛고 앉음
+          return {
+            score: 2,
+            confidence: 0.85,
+            reasoning: '무릎에 손을 딛고 앉음',
+            criteria_met: { completed: true, handUsed: true, handPosition: 'knee' }
+          };
+        } else if (motionComplete && (detectedHandPosition === 'thigh' || detectedHandPosition === 'armrest')) {
+          // 3점: 허벅지/팔걸이에 손 딛고 앉음
           return {
             score: 3,
             confidence: 0.85,
-            reasoning: '손을 사용하여 앉기 조절',
-            criteria_met: { completed: true, handUsed: true, controlled: true }
-          };
-        } else if (motionComplete && postStability > 0.2) {
-          // 2점: 다리 뒤로 의자에 기대어 앉기
-          return {
-            score: 2,
-            confidence: 0.75,
-            reasoning: '의자에 기대어 앉기 조절',
-            criteria_met: { completed: true, handUsed: handUsageDetected, controlled: false }
+            reasoning: `${detectedHandPosition === 'thigh' ? '허벅지' : '팔걸이'}에 손을 딛고 앉음`,
+            criteria_met: { completed: true, handUsed: true, handPosition: detectedHandPosition }
           };
         } else if (sittingRatio > 0.1) {
-          // 1점: 독립적으로 앉지만 조절되지 않은 하강
+          // 1점: 조절되지 않은 하강으로 앉음
           return {
             score: 1,
             confidence: 0.6,
             reasoning: '조절되지 않은 하강으로 앉음',
-            criteria_met: { completed: true, handUsed: handUsageDetected, controlled: false }
+            criteria_met: { completed: false, handUsed: handUsageDetected, handPosition: detectedHandPosition }
           };
         }
         // 0점: 앉기 위해 도움 필요
