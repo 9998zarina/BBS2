@@ -18,7 +18,7 @@ export interface TestResult {
   criteriaMet: Record<string, boolean>;
 }
 
-export type AssessmentPhase = 'ready' | 'countdown' | 'capturing' | 'transitioning' | 'results';
+export type AssessmentPhase = 'ready' | 'countdown' | 'capturing' | 'showingResult' | 'transitioning' | 'results';
 
 // 자세 상태 타입 (미리 정의)
 type PoseState = 'sitting' | 'standing' | 'unknown';
@@ -56,6 +56,8 @@ interface AssessmentState {
   currentCaption: string;            // 현재 화면에 표시할 자막
   // 디버그 정보
   debugInfo: PoseDebugInfo | null;
+  // 마지막 완료된 검사 결과 (결과 화면 표시용)
+  lastResult: TestResult | null;
 }
 
 // 테스트별 설정 (타이머, 최소 유지 시간, 프레임 수)
@@ -886,6 +888,8 @@ type Action =
   | { type: 'START_TRANSITION' }
   | { type: 'TRANSITION_TICK' }
   | { type: 'NEXT_TEST' }
+  | { type: 'CONFIRM_NEXT' }  // 수동으로 다음 검사로 이동
+  | { type: 'SKIP_TEST' }     // 검사 건너뛰기 (4점)
   | { type: 'FINISH' }
   | { type: 'RESTART' }
   | { type: 'UPDATE_CAPTION'; payload: string }
@@ -908,6 +912,7 @@ const initialState: AssessmentState = {
   currentPoseState: 'unknown',
   currentCaption: '',
   debugInfo: null,
+  lastResult: null,
 };
 
 // Reducer
@@ -990,9 +995,10 @@ function assessmentReducer(state: AssessmentState, action: Action): AssessmentSt
       return {
         ...state,
         results: newResults,
-        phase: isLastTest ? 'results' : 'transitioning',
+        phase: isLastTest ? 'results' : 'showingResult',  // 결과 화면 표시
         frames: [],
-        interimScore: null,
+        interimScore: action.payload.score,
+        lastResult: action.payload,  // 마지막 결과 저장
         countdownValue: 3,
       };
     }
@@ -1017,7 +1023,76 @@ function assessmentReducer(state: AssessmentState, action: Action): AssessmentSt
         waitingForInitialPose: true,  // 초기 자세 대기 시작
         initialPoseDetected: false,
         currentPoseState: 'unknown',
+        lastResult: null,
       };
+
+    case 'CONFIRM_NEXT': {
+      // 수동으로 다음 검사로 이동 (showingResult → countdown)
+      const isLastTest = state.currentTestIndex >= 13;
+      if (isLastTest) {
+        return { ...state, phase: 'results' };
+      }
+      return {
+        ...state,
+        phase: 'countdown',
+        currentTestIndex: state.currentTestIndex + 1,
+        frames: [],
+        interimScore: 4,
+        countdownValue: 3,
+        elapsedSec: 0,
+        holdTimeSec: 0,
+        startTime: null,
+        timerStarted: false,
+        waitingForInitialPose: true,
+        initialPoseDetected: false,
+        currentPoseState: 'unknown',
+        lastResult: null,
+        currentCaption: '',
+      };
+    }
+
+    case 'SKIP_TEST': {
+      // 검사 건너뛰기 (4점 부여)
+      const currentTest = BBS_TEST_ITEMS[state.currentTestIndex];
+      const skipResult: TestResult = {
+        testId: currentTest.id,
+        testNameKo: currentTest.nameKo,
+        score: 4,
+        confidence: 1.0,
+        reasoning: '검사 건너뜀 (4점)',
+        criteriaMet: { skipped: true },
+      };
+      const newResults = [...state.results, skipResult];
+      const isLastTest = state.currentTestIndex >= 13;
+
+      if (isLastTest) {
+        return {
+          ...state,
+          results: newResults,
+          phase: 'results',
+          lastResult: skipResult,
+        };
+      }
+
+      return {
+        ...state,
+        results: newResults,
+        phase: 'countdown',
+        currentTestIndex: state.currentTestIndex + 1,
+        frames: [],
+        interimScore: 4,
+        countdownValue: 3,
+        elapsedSec: 0,
+        holdTimeSec: 0,
+        startTime: null,
+        timerStarted: false,
+        waitingForInitialPose: true,
+        initialPoseDetected: false,
+        currentPoseState: 'unknown',
+        lastResult: null,
+        currentCaption: '',
+      };
+    }
 
     case 'FINISH':
       return {
@@ -1477,6 +1552,22 @@ export function useBBSAssessment() {
     dispatch({ type: 'RESTART' });
   }, [stopTTS]);
 
+  // 다음 검사로 이동 (수동)
+  const confirmNext = useCallback(() => {
+    const nextIndex = state.currentTestIndex + 1;
+    if (nextIndex < 14) {
+      const nextTest = BBS_TEST_ITEMS[nextIndex];
+      speak(`다음 검사, ${nextTest.nameKo}. 준비해주세요.`);
+    }
+    dispatch({ type: 'CONFIRM_NEXT' });
+  }, [state.currentTestIndex, speak]);
+
+  // 검사 건너뛰기 (4점)
+  const skipTest = useCallback(() => {
+    speak('검사를 건너뜁니다. 4점이 부여됩니다.');
+    dispatch({ type: 'SKIP_TEST' });
+  }, [speak]);
+
   // 현재 테스트 설정
   const testConfig = TEST_CONFIG[currentTest?.id || 1];
   const remainingSec = Math.max(0, testConfig.durationSec - state.elapsedSec);
@@ -1514,14 +1605,20 @@ export function useBBSAssessment() {
     // 디버그 정보
     debugInfo: state.debugInfo,
 
+    // 마지막 검사 결과 (결과 화면용)
+    lastResult: state.lastResult,
+
     // Actions
     addFrame,
     start,
     restart,
+    confirmNext,  // 다음 검사로 이동
+    skipTest,     // 검사 건너뛰기 (4점)
 
     // Computed
     isCapturing: state.phase === 'capturing',
     isReady: state.phase === 'ready',
     isComplete: state.phase === 'results',
+    isShowingResult: state.phase === 'showingResult',  // 결과 표시 중
   };
 }

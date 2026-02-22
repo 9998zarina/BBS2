@@ -44,6 +44,61 @@ export function BBSLiveAssessment() {
     );
   }
 
+  // 검사 완료 후 결과 표시 화면
+  if (assessment.isShowingResult && assessment.lastResult) {
+    const result = assessment.lastResult;
+    const getScoreColor = (score: number) => {
+      if (score >= 4) return 'text-green-400';
+      if (score >= 3) return 'text-blue-400';
+      if (score >= 2) return 'text-yellow-400';
+      return 'text-red-400';
+    };
+
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="max-w-lg w-full mx-4">
+          <div className="bg-gray-800 rounded-2xl p-8 text-center">
+            {/* 검사 번호 및 이름 */}
+            <div className="mb-6">
+              <span className="inline-block px-4 py-2 bg-blue-600 rounded-full text-white text-sm font-medium mb-3">
+                검사 {result.testId} / 14
+              </span>
+              <h2 className="text-2xl font-bold text-white">{result.testNameKo}</h2>
+            </div>
+
+            {/* 점수 표시 */}
+            <div className="mb-8">
+              <div className={`text-8xl font-bold ${getScoreColor(result.score)} mb-2`}>
+                {result.score}
+              </div>
+              <div className="text-2xl text-gray-400">/ 4점</div>
+            </div>
+
+            {/* 평가 설명 */}
+            <div className="mb-8 p-4 bg-gray-700 rounded-lg">
+              <p className="text-gray-300">{result.reasoning}</p>
+            </div>
+
+            {/* 현재 총점 */}
+            <div className="mb-8 text-gray-400">
+              현재 총점: <span className="text-white font-bold text-xl">{assessment.totalScore}</span> / 56
+            </div>
+
+            {/* 버튼들 */}
+            <div className="flex gap-4">
+              <button
+                onClick={assessment.confirmNext}
+                className="flex-1 px-6 py-4 bg-blue-600 text-white rounded-xl font-bold text-lg hover:bg-blue-700 transition-colors"
+              >
+                {assessment.currentTestIndex >= 13 ? '결과 보기' : '다음 검사'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Ready screen
   if (assessment.isReady) {
     return (
@@ -149,15 +204,25 @@ export function BBSLiveAssessment() {
       {/* Header */}
       <header className="bg-gray-800 text-white">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <button
-            onClick={handleRestart}
-            className="flex items-center gap-2 text-gray-300 hover:text-white"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-            Exit
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleRestart}
+              className="flex items-center gap-2 text-gray-300 hover:text-white"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              Exit
+            </button>
+
+            {/* 건너뛰기 버튼 */}
+            <button
+              onClick={assessment.skipTest}
+              className="px-3 py-1.5 bg-yellow-600 text-white text-sm rounded-lg hover:bg-yellow-700 transition-colors"
+            >
+              건너뛰기 (4점)
+            </button>
+          </div>
 
           <div className="flex items-center gap-4">
             <span className="text-sm text-gray-400">Progress</span>
