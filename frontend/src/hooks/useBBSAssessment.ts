@@ -884,7 +884,7 @@ type Action =
   | { type: 'UPDATE_POSE_STATE'; payload: PoseState }
   | { type: 'DETECT_INITIAL_POSE' }
   | { type: 'START_TIMER' }
-  | { type: 'COMPLETE_TEST'; payload: TestResult }
+  | { type: 'COMPLETE_TEST'; payload: TestResult; autoTransition?: boolean }
   | { type: 'START_TRANSITION' }
   | { type: 'TRANSITION_TICK' }
   | { type: 'NEXT_TEST' }
@@ -992,13 +992,21 @@ function assessmentReducer(state: AssessmentState, action: Action): AssessmentSt
     case 'COMPLETE_TEST': {
       const newResults = [...state.results, action.payload];
       const isLastTest = state.currentTestIndex >= 13;
+      const shouldAutoTransition = action.autoTransition !== false;  // 기본값 true
+
+      // 자동 전환 모드: transitioning으로 이동
+      // 수동 전환 모드: showingResult로 이동
+      const nextPhase = isLastTest
+        ? 'results'
+        : (shouldAutoTransition ? 'transitioning' : 'showingResult');
+
       return {
         ...state,
         results: newResults,
-        phase: isLastTest ? 'results' : 'showingResult',  // 결과 화면 표시
+        phase: nextPhase,
         frames: [],
         interimScore: action.payload.score,
-        lastResult: action.payload,  // 마지막 결과 저장
+        lastResult: action.payload,
         countdownValue: 3,
       };
     }
@@ -1120,7 +1128,13 @@ function assessmentReducer(state: AssessmentState, action: Action): AssessmentSt
   }
 }
 
-export function useBBSAssessment() {
+// 옵션: autoTransition이 true면 자동 전환, false면 수동 전환
+interface UseBBSAssessmentOptions {
+  autoTransition?: boolean;  // 기본값: true (자동 전환)
+}
+
+export function useBBSAssessment(options: UseBBSAssessmentOptions = {}) {
+  const { autoTransition = true } = options;
   const [state, dispatch] = useReducer(assessmentReducer, initialState);
   const countdownIntervalRef = useRef<number | null>(null);
   const scoringIntervalRef = useRef<number | null>(null);
@@ -1348,6 +1362,7 @@ export function useBBSAssessment() {
                     reasoning: result.reasoning,
                     criteriaMet: result.criteria_met,
                   },
+                  autoTransition,
                 });
               }, 1500);
             }
@@ -1403,6 +1418,7 @@ export function useBBSAssessment() {
                     reasoning: result.reasoning,
                     criteriaMet: result.criteria_met,
                   },
+                  autoTransition,
                 });
               }, 1500);
             }
@@ -1496,6 +1512,7 @@ export function useBBSAssessment() {
             reasoning: result.reasoning,
             criteriaMet: result.criteria_met,
           },
+          autoTransition,
         });
       }
     };

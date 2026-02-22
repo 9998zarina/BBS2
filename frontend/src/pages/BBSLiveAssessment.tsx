@@ -10,7 +10,8 @@ import type { YoloLandmarks } from '../hooks/usePoseDetection';
 
 export function BBSLiveAssessment() {
   const navigate = useNavigate();
-  const assessment = useBBSAssessment();
+  // 수동 전환 모드: 검사 완료 후 결과 화면 표시, 다음 버튼으로 진행
+  const assessment = useBBSAssessment({ autoTransition: false });
 
   // 환자 추적 리셋 카운터 (restart 시에만 증가)
   const [resetCount, setResetCount] = useState(0);
